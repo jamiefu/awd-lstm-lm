@@ -1,4 +1,7 @@
 import argparse
+import csv
+import re
+import string
 import time
 import math
 import numpy as np
@@ -164,10 +167,46 @@ def evaluate(data_source, batch_size=10):
     for i in range(0, data_source.size(0) - 1, args.bptt):
         data, targets = get_batch(data_source, i, args, evaluation=True)
         output, hidden = model(data, hidden)
+        logits = model.decoder(output)
+        # logProba = nn.functional.log_softmax(logits, dim=1)
+        # pred_idxs = torch.argmax(logProba, dim=1)
         total_loss += len(data) * criterion(model.decoder.weight, model.decoder.bias, output, targets).data
         hidden = repackage_hidden(hidden)
     return total_loss.item() / len(data_source)
 
+def new_tokenize(text):
+    words = text.split()
+    ids = torch.LongTensor(len(words))
+    token = 0
+    for word in words:
+        if word in corpus.dictionary.word2idx:
+            ids[token] = corpus.dictionary.word2idx[word]
+        else:
+            ids[token] = corpus.dictionary.word2idx['<unk>']
+        token += 1
+    return ids
+
+def play(text, batch_size=1):
+    model.eval()
+    text = text.lower()
+    text = re.sub('\d+', 'N', text)
+    punc = string.punctuation.replace(".", "’—“”")
+    punc = punc.replace("'", "")
+    text = text.translate(str.maketrans('', '', punc))
+    text = text.replace("n't", " n't")
+    text = text.replace("'s", " 's")
+    text = text.replace("'ve", " 've")
+    text = text.replace("'d", " 'd")
+    text = text.replace("'ll", " 'll")
+    data = new_tokenize(text).unsqueeze(1).cuda()
+    hidden = model.init_hidden(batch_size)
+    output, hidden = model(data, hidden)
+    logits = model.decoder(output)
+    logProba = nn.functional.log_softmax(logits, dim=1)
+    pred_idxs = torch.argmax(logProba, dim=1)
+    preds = [corpus.dictionary.idx2word[idx] for idx in pred_idxs]
+    next_word = preds[-1]
+    return next_word
 
 def train():
     # Turn on training mode which enables dropout.
@@ -213,6 +252,9 @@ def train():
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss.item() / args.log_interval
             elapsed = time.time() - start_time
+            with open("breit_train.csv", mode='a') as train:
+                writer = csv.writer(train, delimiter=',')
+                writer.writerow([epoch, batch, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)])
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:05.5f} | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
                 epoch, batch, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
@@ -246,6 +288,9 @@ try:
                 prm.data = optimizer.state[prm]['ax'].clone()
 
             val_loss2 = evaluate(val_data)
+            with open("breit_val.csv", mode='a') as val:
+                writer = csv.writer(val, delimiter=',')
+                writer.writerow([epoch, val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)])
             print('-' * 89)
             print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
@@ -262,6 +307,9 @@ try:
 
         else:
             val_loss = evaluate(val_data, eval_batch_size)
+            with open("breit_val.csv", mode='a') as val:
+                writer = csv.writer(val, delimiter=',')
+                writer.writerow([epoch, val_loss, math.exp(val_loss), val_loss / math.log(2)])
             print('-' * 89)
             print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
@@ -292,9 +340,23 @@ except KeyboardInterrupt:
 # Load the best saved model.
 model_load(args.save)
 
-# Run on test data.
-test_loss = evaluate(test_data, test_batch_size)
-print('=' * 89)
-print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-    test_loss, math.exp(test_loss), test_loss / math.log(2)))
-print('=' * 89)
+try: 
+    # Run on test data.
+    test_loss = evaluate(test_data, test_batch_size)
+    print('=' * 89)
+    print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+        test_loss, math.exp(test_loss), test_loss / math.log(2)))
+    print('=' * 89)
+
+except KeyboardInterrupt:
+    print('-' * 89)
+    print('Exiting from evaluation early')
+
+# text = input("Hey, enter part of a sentence here: ")
+# next_word = play(text)
+# print("Next word:", next_word)
+# while True:
+#     another = input("Add another word? Enter here: ")
+#     text = text + " " + another
+#     next_word = play(text)
+#     print("Next word:", next_word)
