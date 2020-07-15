@@ -116,6 +116,9 @@ def play(text, batch_size=1):
     output, hidden = model(data, hidden)
     logits = model.decoder(output)
     logProba = nn.functional.log_softmax(logits, dim=1)
+    unk_idx = corpus.dictionary.word2idx['<unk>']
+    mini = torch.min(logProba)
+    logProba[:,unk_idx] = mini
     pred_idxs = torch.argmax(logProba, dim=1)
     preds = [corpus.dictionary.idx2word[idx] for idx in pred_idxs]
     next_word = preds[-1]
@@ -127,7 +130,7 @@ model_load(args.save)
 while True:
     text = input("Hey, enter part of a sentence here: ")
     next_word = play(text)
-    for i in range(50):
+    for i in range(70):
         text = text + " " + next_word
         next_word = play(text)
     print("Here's what we got:\n:", text)
